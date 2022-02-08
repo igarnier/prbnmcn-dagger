@@ -1,0 +1,3 @@
+(executable
+ (libraries containers prbnmcn-dagger prbnmcn-dagger-stats)
+ (name ising))

@@ -1,0 +1,72 @@
+{0 Dagger}
+
+{e dagger} is a embedded domain-specific language for probabilistic programming in OCaml.
+Models are written in monadic style. Sampling from the posterior is performed using one of the following
+algorithms:
+- Single-site Metropolis-Hastings, a.k.a.
+  {{: https://web.stanford.edu/~ngoodman/papers/lightweight-mcmc-aistats2011.pdf} Lightweight Metropolis-Hastings}
+- Incrementalized single-site MH, similar to that implemented in {{: http://okmij.org/ftp/kakuritu/Hakaru10/} Hakaru10}
+
+{1 Example}
+
+Let us consider the classical "sprinkler" example (drawn from
+{{: https://dl.acm.org/doi/pdf/10.1145/3236778} Functional Programming for Modular Bayesian Inference}).
+
+Our lawn can become wet either because it rained or because the sprinkler is
+activated. We construct a simple model that encodes our belief that the lawn becomes wet knowing
+that it rained or not and the sprinkler state.
+
+{[
+open Lmh_inference
+open Infix
+
+let model : bool t =
+  let open Infix in
+  let* rain = sample (Stats_dist.bernouilli ~bias:0.2) in
+  let* sprinkler = sample (Stats_dist.bernouilli ~bias:0.1) in
+  let prob_lawn_wet =
+    match (rain, sprinkler) with
+    | (true, true) -> 0.99
+    | (true, false) -> 0.7
+    | (false, true) -> 0.9
+    | (false, false) -> 0.01
+  in
+  let+ () = score prob_lawn_wet in
+  rain
+]}
+
+Each execution trace is weighted by the density of the samples taken in that trace {e and}
+by calls to the [score] construct. The inference algorithm samples execution traces proportionally
+to their total weight. Scoring therefore amounts to a form of soft conditioning (and assigning a score
+of 0 to a trace amounts to rejecting that trace). Let us sample from the posterior implicitly
+defined by our [model].
+
+{[
+let rng_state = RNG.make [| 0x1337; 0x533D |]
+
+let nsamples = 100_000
+
+let samples =
+  Lmh_inference.stream_samples model rng_state
+  |> Seq.take nsamples
+
+let freq =
+  (samples
+  |> Seq.map (fun x -> if x then 1 else 0)
+  |> List.of_seq |> List.fold_left ( + ) 0 |> float_of_int)
+  /. float_of_int nsamples
+]}
+
+The result is that the probability that it rains knowing that the
+lawn is wet is approximately equal to 0.64.
+
+{1 Companion libraries}
+
+In the interest of modularity, sampleable distributions (such as [bernouilli]) are defined in
+auxilliary libraries. Currently, we have:
+{ul {- [prbnmcn-dagger-gsl], which relies on the OCaml bindings to the GNU [gsl] library. Note that [prbnmcn-dagger-gsl] is licensed under the GNU GPL.}
+    {- [prbnmcn-dagger-stats], which relies on [prbnmcn-stats].}}
+
+{1:api API}
+
+{!modules: Dagger.Intf Dagger.Lmh_inference Dagger.Lmh_incremental_inference Dagger.Dist}

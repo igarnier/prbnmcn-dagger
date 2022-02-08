@@ -1,0 +1,22 @@
+(library
+  (name dagger)
+  (public_name prbnmcn-dagger)
+  (modules
+     RNG
+     log_space
+     intf
+     dist
+     foldable
+     incremental_monad
+     cps_monad
+     traced_monad
+     identity_monad
+     lmh_inference
+     lmh_incremental_inference)
+  (ocamlopt_flags -O3 (-warn-error -39))
+  (libraries pringo prbnmcn-cgrph))
+
+(documentation
+   (package prbnmcn-dagger)
+   (mld_files index)
+)
