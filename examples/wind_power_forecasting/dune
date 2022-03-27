@@ -1,0 +1,5 @@
+(executable
+  (name wind_forecast)
+  (ocamlopt_flags -O3)
+  (libraries prbnmcn-dagger prbnmcn-dagger-stats prbnmcn-dagger-gsl containers containers-data ptime csv prbnmcn-gnuplot)
+)

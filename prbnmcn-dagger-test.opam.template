@@ -1,0 +1,14 @@
+build: [
+  ["dune" "subst"] {dev}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@run_dagger_tests" {with-test}
+    "@doc" {with-doc}
+  ]
+]
