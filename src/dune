@@ -1,0 +1,28 @@
+(library
+ (name dagger)
+ (public_name prbnmcn-dagger)
+ (modules
+  dagger
+  RNG
+  log_space
+  intf
+  dist
+  foldable
+  incremental_monad
+  cps_monad
+  traced_monad
+  resampling
+  identity_monad
+  lmh_generic
+  lmh_inference
+  lmh_incremental_inference
+  smc_inference
+  vector)
+ (ocamlopt_flags
+  -O3
+  (-warn-error -39))
+ (libraries prbnmcn-cgrph))
+
+(documentation
+ (package prbnmcn-dagger)
+ (mld_files index smc_inference_example))
