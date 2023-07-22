@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>smc_inference_example (prbnmcn-dagger.smc_inference_example)</title><link rel="stylesheet" href="../odoc.support/odoc.css"/><meta charset="utf-8"/><meta name="generator" content="odoc 2.2.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script><link rel="stylesheet" href="../odoc.support/katex.min.css"/><script src="../odoc.support/katex.min.js"></script><script>
+//<![CDATA[
+
+          document.addEventListener("DOMContentLoaded", function () {
+            var elements = Array.from(document.getElementsByClassName("odoc-katex-math"));
+            for (var i = 0; i < elements.length; i++) {
+              var el = elements[i];
+              var content = el.textContent;
+              var new_el = document.createElement("span");
+              new_el.setAttribute("class", "odoc-katex-math-rendered");
+              var display = el.classList.contains("display");
+              katex.render(content, new_el, { throwOnError: false, displayMode: display });
+              el.replaceWith(new_el);
+            }
+          });
+        
+//]]>
+</script></head><body class="odoc"><nav class="odoc-nav"><a href="index.html">Up</a> – <a href="index.html">prbnmcn-dagger</a> &#x00BB; smc_inference_example</nav><header class="odoc-preamble"><h2 id="sequential-monte-carlo:-examples"><a href="#sequential-monte-carlo:-examples" class="anchor"></a>Sequential Monte Carlo: examples</h2></header><nav class="odoc-toc"><ul><li><a href="#example:-nonlinear-polynomial-regression">Example: Nonlinear polynomial regression</a></li><li><a href="#example:-multinomial-resampling">Example: multinomial resampling</a></li></ul></nav><div class="odoc-content"><h3 id="example:-nonlinear-polynomial-regression"><a href="#example:-nonlinear-polynomial-regression" class="anchor"></a>Example: Nonlinear polynomial regression</h3><p>The example consists in guessing the coefficients of a polynomial by observing a sequence of noisy values at increasing times. The degree of the polynomial is not known in advance. The full code is available in the <code>test/poly.ml</code> file of the source distribution.</p><p>Let us start by defining some module for handling polynomials:</p><pre class="language-ocaml"><code>module Poly :
+sig
+  type t = float array
+  val zero : unit -&gt; t
+  val degree : t -&gt; int
+  val get : t -&gt; int -&gt; float
+  val add : t -&gt; t -&gt; t
+  val smul : float -&gt; t -&gt; t
+  val eval : t -&gt; float -&gt; float
+  val init : int -&gt; (int -&gt; float) -&gt; t
+  val truncate : int -&gt; t -&gt; t
+  val pp : Format.formatter -&gt; t -&gt; unit
+end</code></pre><p>In our model, each particle represents a candidate polynomial, represented by a vector of coefficients.</p><pre class="language-ocaml"><code>open Dagger.Smc_inference
+
+module Smc_types = struct
+  type particle_output = Poly.t
+
+  type resampling_state = unit
+end
+
+module Smc = Make (Smc_types)</code></pre><p>At each observation, these polynomials will &quot;mutate&quot;. This mutation function performs a symmetric random walk on the degree of the polynomial and adds a bit of gaussian noise on each coefficient.</p><pre class="language-ocaml"><code>(* A random walk on polynomials *)
+let mutate (p : Poly.t) =
+  let open Smc in
+  let open Infix in
+  let current_degree = Poly.degree p in
+  let* degree =
+    sample
+      (Stats_dist.uniform
+         [| Int.max 0 (current_degree - 1);
+            current_degree;
+            current_degree + 1
+         |])
+  in
+  let* noise =
+    map_array
+      (Poly.init degree (fun _ -&gt;
+           sample (Stats_dist.gaussian ~mean:0.0 ~std:1.0)))
+      Fun.id
+  in
+  return (Poly.add noise p |&gt; Poly.truncate degree)</code></pre><p>The model proceeds sequentially on observations. After mutation, each particle is scored by estimating how close it fits to the data observed so far, with an additional term penalizing high-degree polynomials. This scoring is followed by a resampling step.</p><pre class="language-ocaml"><code>let model observations =
+  let open Smc in
+  let open Infix in
+  let rec loop observed acc prev_coeffs =
+    match observed with
+    | [] -&gt; return ()
+    | next :: ys -&gt;
+        let* coeffs = mutate prev_coeffs in
+        let acc = next :: acc in
+        (* Score the quality of the fit *)
+        let* () =
+          List_ops.iter
+            (fun (x, y) -&gt;
+              let estimate = Poly.eval coeffs x in
+              log_score @@ Stats_dist.Pdfs.gaussian_ln ~mean:y ~std:1.0 estimate)
+            acc
+        in
+        (* Penalize high-degree polynomials *)
+        let* () =
+          log_score
+          @@ Stats_dist.Pdfs.exponential_ln
+               ~rate:0.5
+               (float (Poly.degree coeffs))
+        in
+        let* () = yield coeffs in
+        loop ys acc coeffs
+  in
+  loop observations [] (Poly.zero ())</code></pre><p>Running this model on some observations produces a sequence of <a href="Dagger/Smc_inference/module-type-S/index.html#type-population"><code>Dagger.Smc_inference.S.population</code></a>. The function <a href="Dagger/Smc_inference/module-type-S/index.html#val-run"><code>Dagger.Smc_inference.S.run</code></a> is used to produce this sequence. Let's examine its arguments one by one.</p><ul><li>We use systematic resampling, a predefined resampling strategy.</li><li>Resampling steps act as state transformers on the type <code>Smc_types.resampling_state</code>. Here, the state is trivial and equal to <code>unit</code>, hence the second argument is <code>()</code>.</li><li>The number of particles is set to be equal to <code class="odoc-katex-math">10000</code>. A higher number of particles allows to better explore the state space (here, the space of polynomials). There's a direct tradeoff between the number of particles and the runtime of the algorithm.</li><li>The penultimate argument is the model itself.</li><li>The last one is the random generator state.</li></ul><pre class="language-ocaml"><code>let run_model observations rng_state : Poly.t Seq.t =
+  Smc.run
+    (systematic_resampling ~ess_threshold:0.5)
+    ()
+    ~npart:10_000
+    (model observations)
+    rng_state
+  |&gt; Seq.filter_map (fun pop -&gt;
+         if Array.length pop.Smc.active = 0 then None
+         else
+           let itotal = 1. /. pop.total_mass in
+           Array.fold_left
+             (fun acc (coeff, w) -&gt; Poly.(add acc (smul (w *. itotal) coeff)))
+             (Poly.zero ())
+             pop.active
+           |&gt; Option.some)
+  |&gt; Seq.memoize</code></pre><p>The raw outcome of <a href="Dagger/Smc_inference/module-type-S/index.html#val-run">Smc.run</a> is a sequence of unnormalized weighted outputs of particles. We perform two transformations on this sequence:</p><ul><li>We're only interested in the intermediate populations, not in the final one so we filter it out.</li><li>We normalize and average each population, yielding the mean polynomial at that step.</li></ul><p>In order to run this model we need to generate some synthetic data. We pick a degree-3 polynomial, evaluate it on some regularly spaced inputs and add some generous amount of gaussian noise on top.</p><pre class="language-ocaml"><code>let coeffs = [| 3.0; 25.0; -8.; 0.5 |]
+
+let noisy_observations rng_state =
+  List.init 150 (fun i -&gt;
+      let x = 0.1 *. float i in
+      (x, Stats.Gen.gaussian ~mean:(Poly.eval coeffs x) ~std:10.0 rng_state))
+
+let rng_state = Random.State.make [| 149572; 3891981; 48478478190758 |]
+
+let observations = noisy_observations rng_state</code></pre><p>Finally, we run the model.</p><pre class="language-ocaml"><code>let run () =
+  let plot_predicted coeffs =
+    List.map (fun (x, _) -&gt; (x, Poly.eval coeffs x)) observations
+  in
+  let coeffs = run_model (noisy_observations rng_state) rng_state in
+  let predicted =
+    coeffs
+    |&gt; Seq.mapi (fun i elt -&gt; (i, elt))
+    |&gt; Seq.filter (fun (i, _) -&gt; i mod 10 = 0)
+    |&gt; Seq.map snd |&gt; Seq.map plot_predicted |&gt; List.of_seq
+  in
+  Seq.iteri (fun i coeff -&gt; Format.printf &quot;%d, %a@.&quot; i Poly.pp coeff) coeffs</code></pre><p>You can have a look at the sequence of all 150 mean polynomials <a href="http://stengah.free.fr/assets/dagger/poly_regr.txt">here</a>. In addition, here is a plot of a subset of 15 mean polynomials together with the synthetic data.</p> <img src="http://stengah.free.fr/assets/dagger/smc_poly_obs.png" style="width:200mm;" /> <h3 id="example:-multinomial-resampling"><a href="#example:-multinomial-resampling" class="anchor"></a>Example: multinomial resampling</h3><p>While the library proposes <a href="Dagger/Smc_inference/index.html#val-systematic_resampling">systematic resampling</a> and <a href="Dagger/Smc_inference/index.html#val-stratified_resampling">stratified resampling</a> as predefined strategies, users can also specify custom ones.</p><p>A resampling strategy is a function of type <a href="Dagger/Resampling/index.html#type-strategy">Resampling.strategy</a>. It must produce a new population from a given one. The operations to access the current population and create the new one are entirely contained in the given <a href="Dagger/Resampling/module-type-Particles/index.html">particles</a> first-class module.</p><p>Multinomial resampling is a basic strategy where new particles are selected randomly with a probability proportional to their weight in the current population. The implementation below constructs a <a href="https://ocaml.org/p/prbnmcn-stats/latest/doc/Stats/Gen/index.html#val-categorical">sampler</a> for the categorical distribution associated to the current population and iteratively takes <code>card</code> samples from it. Each sampled particle is added with an equal weight to the next population using the <a href="Dagger/Resampling/module-type-Particles/index.html#val-append">P.append</a> function.</p><pre class="language-ocaml"><code>let rev_array_of_iter iter =
+  let elts = ref [] in
+  iter (fun elt w -&gt; elts := (elt, w) :: !elts) ;
+  Array.of_list !elts
+
+let multinomial_resampling : (_, float, unit) Resampling.strategy =
+  fun (type o)
+      card
+      ((module P) : (o, float) Resampling.particles)
+      ()
+      rng_state -&gt;
+   let elts = rev_array_of_iter P.iter in
+   let sampler = Stats.Gen.categorical elts in
+   let w = 1. /. (P.total ()) in
+   for _i = 0 to card - 1 do
+     let p = sampler rng_state in
+     P.append p w
+   done</code></pre><p>In practice, resampling is necessary only when the population becomes degenerate. A classical metric for population degeneracy is the effective sample size (ESS). The <code>P</code> module provides an <a href="Dagger/Resampling/module-type-Particles/index.html#val-ess">P.ess</a> which can be used for that purpose. For instance, we can decide to only perform resampling when <code>P.ess () / P.size () &lt; 0.5</code> where <code>P.size ()</code> returns the number of particles in the current population (note that <code>P.ess</code> varies between <code>0</code> and the number of particles).</p><pre class="language-ocaml"><code>let multinomial_resampling' : (_, float, unit) Resampling.strategy =
+  fun (type o)
+      card
+      ((module P) : (o, float) Resampling.particles)
+      ()
+      rng_state -&gt;
+   if (P.ess () /. P.size ()) &gt;= 0.5 then ()
+   else
+     let elts = rev_array_of_iter P.iter in
+     let sampler = Stats.Gen.categorical elts in
+     let w = 1. /. (P.total ()) in
+     for _i = 0 to card - 1 do
+       let p = sampler rng_state in
+       P.append p w
+     done</code></pre><p>Observe that in the first branch of the conditional, we do nothing. In this case, the inference engine will detect that the resampling was a no-op, take the current population and use it for the next iteration.</p><p>As a final note, for some advanced inference algorithms based on SMC, it may be useful to carry a <code>resampling_state</code> forward between each resampling steps. In the example above, this resampling state is of type <code>unit</code> and is therefore trivial. An example making use of this feature is available in the <code>examples/smc-abc</code> directory of the source distribution.</p></div></body></html>
