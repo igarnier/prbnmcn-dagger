@@ -15,23 +15,21 @@
   poly
   yield)
  (libraries
+  prbnmcn-basic-structures
+  prbnmcn-cgrph
   prbnmcn-dagger
   prbnmcn-dagger-stats
   prbnmcn-stats
   prbnmcn-gnuplot
   qcheck
-  qcheck-alcotest)
+  qcheck-alcotest
+  qcheck-core
+  unix
+  zarith)
  (flags
   (:standard -open Basic_structures)))
 
-(executable
+(test
  (name test)
  (modules test)
- (libraries prbnmcn-dagger-test))
-
-(rule
- (alias runtest)
- (deps
-  (:exe test.exe))
- (action
-  (run %{exe})))
+ (libraries alcotest prbnmcn-dagger-test qcheck-core qcheck-alcotest))

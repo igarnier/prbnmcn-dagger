@@ -2,9 +2,11 @@
  (name wind_forecast)
  (ocamlopt_flags -O3)
  (libraries
+  prbnmcn-basic-structures
   prbnmcn-dagger
   prbnmcn-dagger-stats
   prbnmcn-dagger-gsl
+  prbnmcn-stats
   containers
   containers-data
   ptime

@@ -2,4 +2,4 @@
  (name stats_dist)
  (modules stats_dist)
  (public_name prbnmcn-dagger-stats)
- (libraries prbnmcn-dagger prbnmcn-stats))
+ (libraries prbnmcn-basic-structures prbnmcn-dagger prbnmcn-stats))

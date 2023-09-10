@@ -8,6 +8,7 @@
 (authors "Ilias Garnier")
 (maintainers "igarnier@protonmail.com")
 (use_standard_c_and_cxx_flags true)
+(implicit_transitive_deps false)
 
 (package
  (name prbnmcn-dagger)
