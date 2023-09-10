@@ -1,0 +1,263 @@
+{1 Sequential Monte Carlo: examples}
+
+{2 Example: Nonlinear polynomial regression}
+
+The example consists in guessing the coefficients of a polynomial
+by observing a sequence of noisy values at increasing times. The
+degree of the polynomial is not known in advance.
+The full code is available in the [test/poly.ml] file of the source distribution.
+
+Let us start by defining some module for handling polynomials:
+
+{[
+module Poly :
+sig
+  type t = float array
+  val zero : unit -> t
+  val degree : t -> int
+  val get : t -> int -> float
+  val add : t -> t -> t
+  val smul : float -> t -> t
+  val eval : t -> float -> float
+  val init : int -> (int -> float) -> t
+  val truncate : int -> t -> t
+  val pp : Format.formatter -> t -> unit
+end
+]}
+
+In our model, each particle represents a candidate polynomial, represented
+by a vector of coefficients.
+
+{[
+open Dagger.Smc_inference
+
+module Smc_types = struct
+  type particle_output = Poly.t
+
+  type resampling_state = unit
+end
+
+module Smc = Make (Smc_types)
+]}
+
+At each observation, these polynomials will "mutate". This mutation
+function performs a symmetric random walk on the degree of the polynomial
+and adds a bit of gaussian noise on each coefficient.
+
+{[
+(* A random walk on polynomials *)
+let mutate (p : Poly.t) =
+  let open Smc in
+  let open Infix in
+  let current_degree = Poly.degree p in
+  let* degree =
+    sample
+      (Stats_dist.uniform
+         [| Int.max 0 (current_degree - 1);
+            current_degree;
+            current_degree + 1
+         |])
+  in
+  let* noise =
+    map_array
+      (Poly.init degree (fun _ ->
+           sample (Stats_dist.gaussian ~mean:0.0 ~std:1.0)))
+      Fun.id
+  in
+  return (Poly.add noise p |> Poly.truncate degree)
+]}
+
+The model proceeds sequentially on observations. After mutation, each particle is
+scored by estimating how close it fits to the data observed so far,
+with an additional term penalizing high-degree polynomials.
+This scoring is followed by a resampling step.
+{[
+let model observations =
+  let open Smc in
+  let open Infix in
+  let rec loop observed acc prev_coeffs =
+    match observed with
+    | [] -> return ()
+    | next :: ys ->
+        let* coeffs = mutate prev_coeffs in
+        let acc = next :: acc in
+        (* Score the quality of the fit *)
+        let* () =
+          List_ops.iter
+            (fun (x, y) ->
+              let estimate = Poly.eval coeffs x in
+              log_score @@ Stats_dist.Pdfs.gaussian_ln ~mean:y ~std:1.0 estimate)
+            acc
+        in
+        (* Penalize high-degree polynomials *)
+        let* () =
+          log_score
+          @@ Stats_dist.Pdfs.exponential_ln
+               ~rate:0.5
+               (float (Poly.degree coeffs))
+        in
+        let* () = yield coeffs in
+        loop ys acc coeffs
+  in
+  loop observations [] (Poly.zero ())
+]}
+
+Running this model on some observations produces a sequence of
+{!module-Dagger.module-Smc_inference.module-type-S.type-population}.
+The function {!module-Dagger.module-Smc_inference.module-type-S.val-run} is used to produce this sequence. Let's examine
+its arguments one by one.
+{ul
+{- We use systematic resampling, a predefined resampling
+strategy.}
+{- Resampling steps act as state transformers on the type [Smc_types.resampling_state].
+Here, the state is trivial and equal to [unit], hence the second argument is [()].}
+{- The number of particles is set to be equal to {m 10000}. A higher number of particles
+allows to better explore the state space (here, the space of polynomials). There's a direct
+tradeoff between the number of particles and the runtime of the algorithm.}
+{- The penultimate argument is the model itself.}
+{- The last one is the random generator state.}
+}
+
+{[
+let run_model observations rng_state : Poly.t Seq.t =
+  Smc.run
+    (systematic_resampling ~ess_threshold:0.5)
+    ()
+    ~npart:10_000
+    (model observations)
+    rng_state
+  |> Seq.filter_map (fun pop ->
+         if Array.length pop.Smc.active = 0 then None
+         else
+           let itotal = 1. /. pop.total_mass in
+           Array.fold_left
+             (fun acc (coeff, w) -> Poly.(add acc (smul (w *. itotal) coeff)))
+             (Poly.zero ())
+             pop.active
+           |> Option.some)
+  |> Seq.memoize
+]}
+
+The raw outcome of {{!module-Dagger.module-Smc_inference.module-type-S.val-run}Smc.run} is
+a sequence of unnormalized weighted outputs of particles. We perform two
+transformations on this sequence:
+{ul
+{- We're only interested in the intermediate populations, not in the final one
+   so we filter it out.}
+{- We normalize and average each population, yielding the mean polynomial at that step.}
+}
+
+In order to run this model we need to generate some synthetic data. We pick
+a degree-3 polynomial, evaluate it on some regularly spaced inputs and add
+some generous amount of gaussian noise on top.
+
+{[
+let coeffs = [| 3.0; 25.0; -8.; 0.5 |]
+
+let noisy_observations rng_state =
+  List.init 150 (fun i ->
+      let x = 0.1 *. float i in
+      (x, Stats.Gen.gaussian ~mean:(Poly.eval coeffs x) ~std:10.0 rng_state))
+
+let rng_state = Random.State.make [| 149572; 3891981; 48478478190758 |]
+
+let observations = noisy_observations rng_state
+]}
+
+Finally, we run the model.
+{[
+let run () =
+  let plot_predicted coeffs =
+    List.map (fun (x, _) -> (x, Poly.eval coeffs x)) observations
+  in
+  let coeffs = run_model (noisy_observations rng_state) rng_state in
+  let predicted =
+    coeffs
+    |> Seq.mapi (fun i elt -> (i, elt))
+    |> Seq.filter (fun (i, _) -> i mod 10 = 0)
+    |> Seq.map snd |> Seq.map plot_predicted |> List.of_seq
+  in
+  Seq.iteri (fun i coeff -> Format.printf "%d, %a@." i Poly.pp coeff) coeffs
+]}
+
+You can have a look at the sequence of all 150 mean polynomials {{: http://stengah.free.fr/assets/dagger/poly_regr.txt} here}.
+In addition, here is a plot of a subset of 15 mean polynomials together with the synthetic data.
+
+{%html: <img src="http://stengah.free.fr/assets/dagger/smc_poly_obs.png" style="width:200mm;" /> %}
+
+{2 Example: multinomial resampling}
+
+While the library proposes
+{{!module-Dagger.module-Smc_inference.val-systematic_resampling} systematic resampling}
+and {{!module-Dagger.module-Smc_inference.val-stratified_resampling} stratified resampling}
+as predefined strategies, users can also specify custom ones.
+
+A resampling strategy is a function of type {{!module-Dagger.module-Resampling.type-strategy}Resampling.strategy}.
+It must produce a new population from a given one. The operations
+to access the current population and create the new one are entirely contained in
+the given {{!module-Dagger.module-Resampling.module-type-Particles} particles} first-class module.
+
+Multinomial resampling is a basic strategy where new particles are selected randomly
+with a probability proportional to their weight in the current population.
+The implementation below constructs a {{: https://ocaml.org/p/prbnmcn-stats/latest/doc/Stats/Gen/index.html#val-categorical} sampler}
+for the categorical distribution associated to the current population and iteratively takes
+[card] samples from it. Each sampled particle is added with an equal weight to the next population using the
+{{!module-Dagger.module-Resampling.module-type-Particles.val-append} P.append} function.
+
+{[
+let rev_array_of_iter iter =
+  let elts = ref [] in
+  iter (fun elt w -> elts := (elt, w) :: !elts) ;
+  Array.of_list !elts
+
+let multinomial_resampling : (_, float, unit) Resampling.strategy =
+  fun (type o)
+      card
+      ((module P) : (o, float) Resampling.particles)
+      ()
+      rng_state ->
+   let elts = rev_array_of_iter P.iter in
+   let sampler = Stats.Gen.categorical elts in
+   let w = 1. /. (P.total ()) in
+   for _i = 0 to card - 1 do
+     let p = sampler rng_state in
+     P.append p w
+   done
+]}
+
+In practice, resampling is necessary only when the population becomes degenerate.
+A classical metric for population degeneracy is the effective sample size (ESS).
+The [P] module provides an {{!module-Dagger.module-Resampling.module-type-Particles.val-ess} P.ess}
+which can be used for that purpose. For instance, we can decide to only perform
+resampling when [P.ess () / P.size () < 0.5] where [P.size ()] returns the
+number of particles in the current population (note that [P.ess] varies between [0] and
+the number of particles).
+
+{[
+let multinomial_resampling' : (_, float, unit) Resampling.strategy =
+  fun (type o)
+      card
+      ((module P) : (o, float) Resampling.particles)
+      ()
+      rng_state ->
+   if (P.ess () /. P.size ()) >= 0.5 then ()
+   else
+     let elts = rev_array_of_iter P.iter in
+     let sampler = Stats.Gen.categorical elts in
+     let w = 1. /. (P.total ()) in
+     for _i = 0 to card - 1 do
+       let p = sampler rng_state in
+       P.append p w
+     done
+]}
+
+Observe that in the first branch of the conditional, we do nothing.
+In this case, the inference engine will detect that the resampling
+was a no-op, take the current population and use it for
+the next iteration.
+
+As a final note, for some advanced inference algorithms based on SMC, it may be useful to
+carry a [resampling_state] forward between each resampling steps. In the example above,
+this resampling state is of type [unit] and is therefore trivial.
+An example making use of this feature is available in the [examples/smc-abc] directory
+of the source distribution.

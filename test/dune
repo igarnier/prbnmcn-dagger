@@ -1,0 +1,37 @@
+(library
+ (name dagger_tests)
+ (public_name prbnmcn-dagger-test)
+ (modules
+  dagger_tests
+  helpers
+  basic_consistency
+  sprinkler
+  linear_regression
+  diffusions
+  biased_coin
+  resampling_test
+  random_walks
+  map_array
+  poly
+  yield)
+ (libraries
+  prbnmcn-dagger
+  prbnmcn-dagger-stats
+  prbnmcn-stats
+  prbnmcn-gnuplot
+  qcheck
+  qcheck-alcotest)
+ (flags
+  (:standard -open Basic_structures)))
+
+(executable
+ (name test)
+ (modules test)
+ (libraries prbnmcn-dagger-test))
+
+(rule
+ (alias runtest)
+ (deps
+  (:exe test.exe))
+ (action
+  (run %{exe})))

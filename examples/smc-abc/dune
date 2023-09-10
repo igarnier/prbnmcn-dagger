@@ -1,0 +1,11 @@
+(executable
+ (name abc)
+ (ocamlopt_flags -O3)
+ (libraries
+  prbnmcn-dagger
+  prbnmcn-dagger-stats
+  containers
+  containers-data
+  ptime
+  csv
+  prbnmcn-gnuplot))
