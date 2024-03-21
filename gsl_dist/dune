@@ -1,0 +1,5 @@
+(library
+ (name gsl_dist)
+ (modules gsl_dist)
+ (public_name prbnmcn-dagger-gsl)
+ (libraries prbnmcn-dagger))
