@@ -1,0 +1,9 @@
+
+(executable
+ (name polymer)
+ (ocamlopt_flags -O3)
+ (libraries
+  prbnmcn-dagger
+  prbnmcn-dagger-stats
+  prbnmcn-stats
+  csv))
